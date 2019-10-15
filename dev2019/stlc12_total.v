@@ -34,12 +34,15 @@ Inductive tm : Type :=
   | tvar : id -> tm
   | tapp : tm -> tm -> tm (* f(x) *)
   | tabs1 : tm -> tm (* \f x.y *)
-  | tabs2 : nat -> tm -> tm (* rec \f x.y *)
+  (* list of capabilities required by the abstration to apply *)                    
+  | tabs2 : list cap -> tm -> tm (* rec \f x.y *)
 .
 
 Inductive vl : Type :=
 | vbool : bool -> vl
-| vabs  : list cap -> list vl -> tm -> vl
+| vabs1 : list vl -> tm -> vl
+(* list of capabilities in the environment *)
+| vabs2 : list cap -> list vl -> tm -> vl
 .
 
 Definition venv := list vl.
@@ -64,6 +67,7 @@ Fixpoint index {X : Type} (n : id) (l : list X) : option X :=
 
 Definition lookup (n : id) (env: cenv) : option cap :=
   match env with
+    (* if idx the level is less than or equal to the depth n, the variable n is free *)
     | (l, idx) => if ble_nat idx n then index n l else None
   end
 .
@@ -101,7 +105,7 @@ Some None        means stuck
 Some (Some v))   means result v
 *)
 
-Fixpoint teval(n: nat)(env: venv)(t: tm){struct n}: option (option vl) :=
+Fixpoint teval(n: nat)(env: venv)(capenv: cenv)(t: tm){struct n}: option (option vl) :=
   match n with
     | 0 => None
     | S n =>
@@ -109,7 +113,8 @@ Fixpoint teval(n: nat)(env: venv)(t: tm){struct n}: option (option vl) :=
         | ttrue      => Some (Some (vbool true))
         | tfalse     => Some (Some (vbool false))
         | tvar x     => Some (index x env)
-        | tabs y     => Some (Some (vabs env y))
+        | tabs1 y    => Some (Some (vabs env y))
+        | tabs2 n y  => 
         | tapp ef ex   =>
           match teval n env ef with
             | None => None
