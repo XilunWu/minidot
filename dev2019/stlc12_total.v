@@ -11,14 +11,21 @@ Require Export SfLib.
 
 Require Export Arith.EqNat.
 Require Export Arith.Le.
+Require Export Omega.
 
 Module STLC.
 
 Definition id := nat.
 
+(* cap: using DeBrujin levels *)
+Inductive cap : Type :=
+  | canRec : id -> cap
+.
+
 Inductive ty : Type :=
-  | TBool  : ty
-  | TFun   : ty -> ty -> ty
+  | TBool   : ty
+  | TFun1   : ty -> ty -> ty
+  | TFun2   : ty -> ty -> ty
 .
 
 Inductive tm : Type :=
@@ -26,19 +33,22 @@ Inductive tm : Type :=
   | tfalse : tm
   | tvar : id -> tm
   | tapp : tm -> tm -> tm (* f(x) *)
-  | tabs : tm -> tm (* \f x.y *)
+  | tabs1 : tm -> tm (* \f x.y *)
+  | tabs2 : nat -> tm -> tm (* rec \f x.y *)
 .
 
 Inductive vl : Type :=
 | vbool : bool -> vl
-| vabs  : list vl -> tm -> vl
+| vabs  : list cap -> list vl -> tm -> vl
 .
 
 Definition venv := list vl.
 Definition tenv := list ty.
+Definition cenv := ((list cap) * nat) % type.
 
 Hint Unfold venv.
 Hint Unfold tenv.
+Hint Unfold cenv.
 
 Fixpoint length {X: Type} (l : list X): nat :=
   match l with
@@ -52,6 +62,12 @@ Fixpoint index {X : Type} (n : id) (l : list X) : option X :=
     | a :: l'  => if beq_nat n (length l') then Some a else index n l'
   end.
 
+Definition lookup (n : id) (env: cenv) : option cap :=
+  match env with
+    | (l, idx) => if ble_nat idx n then index n l else None
+  end
+.
+
 
 Inductive has_type : tenv -> tm -> ty -> Prop :=
 | t_true: forall env,
@@ -61,15 +77,23 @@ Inductive has_type : tenv -> tm -> ty -> Prop :=
 | t_var: forall x env T1,
            index x env = Some T1 ->
            has_type env (tvar x) T1
-| t_app: forall env f x T1 T2,
-           has_type env f (TFun T1 T2) ->
+| t_app1: forall env f x T1 T2,
+           has_type env f (TFun1 T1 T2) ->
            has_type env x T1 ->
            has_type env (tapp f x) T2
-| t_abs: forall env y T1 T2,
-           has_type (T1::env) y T2 -> 
-           has_type env (tabs y) (TFun T1 T2)
+| t_app2: forall env f x T1 T2,
+           has_type env f (TFun2 T1 T2) ->
+           has_type env x T1 ->
+           has_type env (tapp f x) T2
+(* Add function type to the tenv of body *)
+| t_abs_term: forall env y T1 T2,
+           has_type (T1::env) y T2 ->
+           has_type env (tabs1 y) (TFun1 T1 T2)
+| t_abs_nonterm: forall env n y T1 T2 capenv idx,
+           lookup n capenv = Some (canRec idx) -> 
+           has_type (T1::(TFun2 T1 T2)::env) y T2 -> 
+           has_type env (tabs2 n y) (TFun2 T1 T2)
 .
-
 
 (*
 None             means timeout
@@ -96,6 +120,7 @@ Fixpoint teval(n: nat)(env: venv)(t: tm){struct n}: option (option vl) :=
                 | None => None
                 | Some None => Some None
                 | Some (Some vx) =>
+(* f value is not in the venv of body so no recursive calls *)                  
                   teval n (vx::env2) ey
               end
           end
@@ -111,7 +136,8 @@ Fixpoint val_type (v:vl) (T:ty): Prop := match v, T with
 | vbool b, TBool => True
 | vabs env y, TFun T1 T2 =>
   (forall vx, val_type vx T1 ->
-     exists v, tevaln (vx::env) y v /\ val_type v T2)
+              exists v, tevaln (vx::env) y v /\ val_type v T2)
+(*     exists v, tevaln (vx::(vabs env y)::env) y v /\ val_type v T2)   *)
 | _,_ => False
 end.
 
@@ -221,6 +247,73 @@ Proof.
   intros. simpl in H. destruct vf. inversion H. eauto. 
 Qed.
 
+(* if not a timeout, then result not stuck and well-typed *)
+
+Theorem full_safety : forall n e tenv venv res T,
+  teval n venv e = Some res -> has_type tenv e T -> wf_env venv tenv ->
+  exists v, res = Some v /\ val_type v T.
+
+Proof.
+  intros n. induction n.
+  (* 0   *) intros. inversion H.
+  (* S n *) intros. destruct e; inversion H; inversion H0.
+
+  Case "True".  eexists. split. eauto. simpl. eauto.
+  Case "False". eexists. split. eauto. simpl. eauto.
+
+  Case "Var".
+    destruct (index_safe_ex venv0 tenv0 T i) as [v IV]. eauto. eauto.
+    inversion IV as [I V].
+
+    rewrite I. eexists. split. eauto. eapply V.
+
+  Case "App".
+    remember (teval n venv0 e1) as tf. (* not stuck *)
+    remember (teval n venv0 e2) as tx. 
+    subst T.
+
+    destruct tf as [rf|]; destruct tx as [rx|]; try solve by inversion.
+
+    (* eval f is not stuck and well-typed *)
+    assert (exists vf, rf = Some vf /\ val_type vf (TFun T1 T2)) as HRF. subst. eapply IHn; eauto.
+
+
+    (* eval x is not stuck and well-typed *)
+    assert (exists vx, rx = Some vx /\ val_type vx T1) as HRX. subst. eapply IHn; eauto.
+
+    (* body *)
+    inversion HRF as [vf [EF HVF]]. 
+    inversion HRX as [vx [EX HVX]]. subst. eapply invert_abs in HVF.
+    destruct HVF as [venv1 [y [HF IHF]]]. destruct (IHF vx). eauto. inversion H2.
+
+    (* first attempt *)
+    eapply IHn.
+
+    (* not stuck *)
+    simpl in H. subst. eauto.
+    (* well-typed *)
+    admit.
+    (* well-formed env *)
+    admit. 
+
+    (* first attempt ends*)
+
+    (* second attempt *)
+    (* will need "tevaln (vx::venv1) y v -> teval n (vx::venv1) y v" *)
+
+    (*    inversion HVF. (* now we know it's a closure, and we have has_type evidence *)  *)
+
+    (* other case: tx = None *)
+    assert (exists vf, rf = Some vf /\ val_type vf (TFun T1 T2)) as HRF. subst. eapply IHn; eauto.
+
+    inversion HRF as [vf [EF HVF]]. subst.
+    (* TODO: HVF is not inductive here *)
+    destruct HVF. subst. inversion H3. (* contradiction *)
+
+
+  Case "Abs".
+    eexists. split. eauto. eapply v_abs; eauto.
+Qed.
 
 (* if well-typed, then result is an actual value (not stuck and not a timeout),
    for large enough n *)
@@ -242,7 +335,7 @@ Proof.
     destruct (index_safe_ex venv0 env T1 x) as [v IV]. eauto. eauto. 
     inversion IV as [I V]. 
 
-    exists v. split. exists 0. intros. destruct n. omega. simpl. rewrite I. eauto. eapply V.
+    exists v. split. exists 0. intros. destruct n. simpl. omega. simpl. rewrite I. eauto. eapply V.
 
   - Case "App".
     destruct (IHW1 venv0 WFE) as [vf [IW1 HVF]].
@@ -261,12 +354,14 @@ Proof.
       exists (S (nf+nx+ny)). intros. destruct n. omega. simpl.
       rewrite IWF. subst vf. rewrite IWX. rewrite IWY. eauto.
       omega. omega. omega.
-    }
+    } 
     eapply HVY.
     
   - Case "Abs".
     eexists. split. exists 0. intros. destruct n. omega. simpl. eauto. simpl.
     intros. eapply IHW. eapply wfe_cons; eauto.
 Qed.
+
+Theorem 
 
 End STLC.
