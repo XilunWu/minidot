@@ -7,6 +7,7 @@
 (* From this follows both type soundness and strong      *)
 (* normalization for STLC.                               *)
 
+(* Introduce the STLC1/2 style *)
 Require Export SfLib.
 
 Require Export Arith.EqNat.
@@ -17,15 +18,16 @@ Module STLC.
 
 Definition id := nat.
 
-(* cap: using DeBrujin levels *)
-Inductive cap : Type :=
-  | canRec : id -> cap
+Inductive class : Type :=
+  | First  : class
+  | Second : class
 .
 
+(* types *)
 Inductive ty : Type :=
-  | TBool   : ty
-  | TFun1   : ty -> ty -> ty
-  | TFun2   : ty -> ty -> ty
+  | TBool  : ty
+  | TRec   : ty (* the capability for recursion *)
+  | TFun   : ty -> class -> ty -> ty
 .
 
 Inductive tm : Type :=
@@ -33,25 +35,43 @@ Inductive tm : Type :=
   | tfalse : tm
   | tvar : id -> tm
   | tapp : tm -> tm -> tm (* f(x) *)
-  | tabs1 : tm -> tm (* \f x.y *)
-  (* list of capabilities required by the abstration to apply *)                    
-  | tabs2 : list cap -> tm -> tm (* rec \f x.y *)
+  | tabs : class -> tm -> tm (* \f x.y *)
+  (* tabs_rec takes another argument of type TRec *)                    
+  (* | tabs_rec : tm -> tm -> tm (* rec \f x.y *) *)
 .
 
 Inductive vl : Type :=
-| vbool : bool -> vl
-| vabs1 : list vl -> tm -> vl
-(* list of capabilities in the environment *)
-| vabs2 : list cap -> list vl -> tm -> vl
+  | vbool : bool -> vl
+  | vabs : list vl -> class -> tm -> vl
+  | vrec : vl
 .
 
-Definition venv := list vl.
-Definition tenv := list ty.
-Definition cenv := ((list cap) * nat) % type.
+(* Options: 1. TRec => (T => U); 2. (TRec, T) => U with tapprec in tm *)
+(* 
+   Example: 
+def main()(rec: TRec) {
+  // f: T => U, or TRec => (T=>U)? 
+  def f(x: T)(implicit rec: TRec): U {
+    // f: TRec => (T=>U)
+    f(x-1)(rec) // terminates; f(x+1) would not. 
+  }
+  f(10)(rec)
+}
+*)
+(* In original STLC, all functions are single-argument. No multiple-arguments functions *)
+(* Design 1: make recursive functions of type TRec => (T=>U) *)
+(* Design 2: make recursive functions of type (TRec, T) => U
+   Type: TFun; TFunRec. (TFun T1 T2) (TFunRec T1 T2)
+   tm: tapp; tapprec. (tapp (tabs y) t) (tapprec (tabsrec y) rec t) 
+? Why it is not tabs and tabsrec. also consider why we don't need make trec a term because it is given to lambda in application. 
+   value: vabs; vabsrec. (vabs env y) (vabsrec env (vabsrec env2 y) y)
+ *)
+
+Definition venv := env vl.  (* value environments *)
+Definition tenv := env ty.  (* type environments  *)
 
 Hint Unfold venv.
 Hint Unfold tenv.
-Hint Unfold cenv.
 
 Fixpoint length {X: Type} (l : list X): nat :=
   match l with
@@ -65,46 +85,97 @@ Fixpoint index {X : Type} (n : id) (l : list X) : option X :=
     | a :: l'  => if beq_nat n (length l') then Some a else index n l'
   end.
 
-Definition lookup (n : id) (env: cenv) : option cap :=
-  match env with
-    (* if idx the level is less than or equal to the depth n, the variable n is free *)
-    | (l, idx) => if ble_nat idx n then index n l else None
-  end
+Definition lookup {X : Type} (n : var) (l : env X) : option X :=
+  match l with
+    | Def l1 l2 m =>
+         match n with
+           | V First idx  => index idx l1
+           | V Second idx => if ble_nat m idx then index idx l2 else None
+         end
+   end
 .
 
+(* restrict visible bindings in environment *)
+Definition sanitize_any {X : Type} (l : env X) (n:nat): env X :=
+  match l with
+    | Def l1 l2 _ => Def X l1 l2 n
+  end.
 
-Inductive has_type : tenv -> tm -> ty -> Prop :=
-| t_true: forall env,
-           has_type env ttrue TBool
-| t_false: forall env,
-           has_type env tfalse TBool
-| t_var: forall x env T1,
-           index x env = Some T1 ->
-           has_type env (tvar x) T1
-| t_app1: forall env f x T1 T2,
-           has_type env f (TFun1 T1 T2) ->
-           has_type env x T1 ->
-           has_type env (tapp f x) T2
-| t_app2: forall env f x T1 T2,
-           has_type env f (TFun2 T1 T2) ->
-           has_type env x T1 ->
-           has_type env (tapp f x) T2
-(* Add function type to the tenv of body *)
-| t_abs_term: forall env y T1 T2,
-           has_type (T1::env) y T2 ->
-           has_type env (tabs1 y) (TFun1 T1 T2)
-| t_abs_nonterm: forall env n y T1 T2 capenv idx,
-           lookup n capenv = Some (canRec idx) -> 
-           has_type (T1::(TFun2 T1 T2)::env) y T2 -> 
-           has_type env (tabs2 n y) (TFun2 T1 T2)
+Definition sanitize_env {X : Type} (c : class) (l : env X) : env X :=
+  match c,l  with
+    | First, Def _ l2 _ => sanitize_any l (length l2)
+    | Second, _ => l
+  end.
+
+(* add new binding to environment *)
+Definition expand_env {X : Type} (l : env X) (x : X) (c : class) : (env X) :=
+match l with
+| Def l1 l2 m =>
+   match c with
+   | First => Def X (x::l1) l2 m
+   | Second => Def X l1 (x::l2) m
+   end
+end
+.
+
+Inductive has_type : tenv -> tm -> class -> ty -> Prop :=
+| t_true: forall env c,
+           has_type env ttrue c TBool
+| t_false: forall env c,
+           has_type env tfalse c TBool
+| t_rec: forall env,
+           has_type env trec Second TRec
+| t_var: forall x env c T1,
+           lookup x (sanitize_env c env) = Some T1 ->
+           has_type env (tvar x) c T1
+| t_app: forall m n env f x T1 T2,
+           has_type env f Second (TFun T1 m T2) ->
+           has_type env x m T1 ->
+           has_type env (tapp f x) n T2
+| t_abs: forall m n env y T1 T2,
+           has_type (expand_env (expand_env (sanitize_env n env) (TFun T1 m T2) Second) T1 m) y First T2 ->
+           has_type env (tabs m y) n (TFun T1 m T2)
+| t_abs_rec:  forall m n env y T1 T2,
+          (* \frec r x.y *)
+          has_type (expand_env (expand_env (sanitize_env n env) (TFun TRec Second (TFun T1 m T2)) Second) T1 m) y First T2 ->
+          has_type env (tabs m y) n (TFun T1 m T2)
 .
 
 (*
 None             means timeout
 Some None        means stuck
 Some (Some v))   means result v
-*)
+ *)
 
+Fixpoint teval(k: nat)(env: venv)(t: tm)(n: class){struct k}: option (option vl) :=
+  match k with
+    | 0 => None
+    | S k' =>
+      match t with
+        | ttrue      => Some (Some (vbool true))
+        | tfalse     => Some (Some (vbool false))
+        | trec       => Some (Some (vrec))
+        | tvar x     => Some (lookup x (sanitize_env n env))
+        | tabs m y   => Some (Some (vabs (sanitize_env n env) m y))
+        | tapp ef ex   =>
+           match teval k' env ef Second with
+             | None => None
+             | Some None => Some None
+             | Some (Some (vbool _)) => Some None
+             | Some (Some trec) => Some None
+             | Some (Some (vabs env2 m ey)) =>
+                match teval k' env ex m with
+                  | None => None
+                  | Some None => Some None
+                  | Some (Some trec) =>
+                    (* ef is a recursive function*)
+                  | Some (Some vx) =>
+                       teval k' (expand_env (expand_env env2 (vabs env2 m ey) Second) vx m) ey First
+                end
+          end
+      end
+  end.
+(*
 Fixpoint teval(n: nat)(env: venv)(capenv: cenv)(t: tm){struct n}: option (option vl) :=
   match n with
     | 0 => None
@@ -113,8 +184,7 @@ Fixpoint teval(n: nat)(env: venv)(capenv: cenv)(t: tm){struct n}: option (option
         | ttrue      => Some (Some (vbool true))
         | tfalse     => Some (Some (vbool false))
         | tvar x     => Some (index x env)
-        | tabs1 y    => Some (Some (vabs env y))
-        | tabs2 n y  => 
+        | tabs y    => Some (Some (vabs env y))
         | tapp ef ex   =>
           match teval n env ef with
             | None => None
@@ -131,7 +201,7 @@ Fixpoint teval(n: nat)(env: venv)(capenv: cenv)(t: tm){struct n}: option (option
           end
       end
   end.
-
+*)
 
 Definition tevaln env e v := exists nm, forall n, n > nm -> teval n env e = Some (Some v).
 
