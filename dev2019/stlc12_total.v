@@ -40,7 +40,7 @@ Module STLC.
   Inductive tm : Type :=
   | ttrue : tm
   | tfalse : tm
-  | tvar : id -> tm
+  | tvar : var -> tm
   | tapp : tm -> tm -> tm (* f(x) *)
   | tapprec : tm -> tm -> tm -> tm (* f(rcap)(x) *)
   | tabs : class -> tm -> tm (* \f x.y *)
@@ -119,14 +119,14 @@ Module STLC.
   | t_false: forall env n,
       has_type env tfalse n TBool
   | t_var: forall x env n T1,
-      lookup (V n x) (sanitize_env n env) = Some T1 ->
+      lookup x (sanitize_env n env) = Some T1 ->
       has_type env (tvar x) n T1
   | t_app: forall m n env f x T1 T2,
       has_type env f Second (TFun T1 m T2) ->
       has_type env x m T1 ->
       has_type env (tapp f x) n T2
   | t_apprec: forall m n env f r x T1 T2,
-      (* Second-class recursion cap is in env *)
+      (* Second-class recursion cap variable is in env *)
       has_type env r Second TRec ->
       (* Any-class argument x *)
       has_type env x m T1 ->
@@ -152,7 +152,7 @@ Fixpoint teval(k: nat)(env: venv)(t: tm)(n: class){struct k}: option (option vl)
       match t with
         | ttrue      => Some (Some (vbool true))
         | tfalse     => Some (Some (vbool false))
-        | tvar x     => Some (lookup (V n x) (sanitize_env n env))
+        | tvar x     => Some (lookup x (sanitize_env n env))
         | tabs m y   => Some (Some (vabs (sanitize_env n env) m y))
         | tapp ef ex   =>
            match teval k' env ef Second with
@@ -228,16 +228,21 @@ Fixpoint teval(n: nat)(env: venv)(capenv: cenv)(t: tm){struct n}: option (option
   end.
 *)
 
-Definition tevaln env e v := exists nm, forall n, n > nm -> teval n env e = Some (Some v).
+(* evaluation on term e is terminating *)
+Definition tevaln env e c v := exists nm, forall n, n > nm -> teval n env c e = Some (Some v).
 
 
 (* need to use Fixpoint because of positivity restriction *)
 Fixpoint val_type (v:vl) (T:ty): Prop := match v, T with
 | vbool b, TBool => True
-| vabs env y, TFun T1 T2 =>
+| vrec, TRec => True
+| vabs env Second y, TFun T1 m T2 =>
   (forall vx, val_type vx T1 ->
-              exists v, tevaln (vx::env) y v /\ val_type v T2)
+              exists v, tevaln (expand_env (expand_env env v Second) vx m) Second y v /\ val_type v T2)
 (*     exists v, tevaln (vx::(vabs env y)::env) y v /\ val_type v T2)   *)
+| vabsrec env Second y, TFunRec T1 m T2 =>
+  (forall vx, val_type vx T1 ->
+              exists v, tevaln (expand_env (expand_env (expand_env env v Second) vx m) vrec Second) y v /\ val_type v T2)
 | _,_ => False
 end.
 
