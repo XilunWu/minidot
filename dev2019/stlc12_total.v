@@ -64,7 +64,7 @@ Module STLC.
        // f: TRec => (T=>U)
        f(cap)(x-1)  // tapprec f r x
      }
-
+     // rec cap has to be present here.
      f(10) // tapp f 10
    *)
   Definition venv := env vl.  (* value environments *)
