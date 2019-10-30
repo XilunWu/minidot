@@ -282,6 +282,12 @@ Qed.
 Hint Immediate wf_sanitize.
    
 
+Lemma abs_absrec : forall m n env y T1 T2,
+  has_type (expand_env (expand_env (sanitize_env n env) (TFunRec T1 m T2) Second) T1 m) y First T2 ->
+  has_type (expand_env (expand_env (sanitize_env n env) (TFun T1 m T2) Second) T1 m) y First T2.
+Proof.
+  intros. destruct y; inversion H; eauto. Admitted.
+
 (* if result of STLC 1/2 evaluation is not a timeout, then *)
 (* it is not stuck, and well-typed *)
 
@@ -391,6 +397,7 @@ intros k. induction k.
     
   - Case "Abs". intros. inversion H. inversion H0.
     eapply not_stuck. eapply v_abs. eapply wf_sanitize. eauto.
+    apply abs_absrec in H15. subst. rewrite H14 in H15. inversion H14. subst.
     eauto.
 Qed.
 (* From nano-total: *)
