@@ -49,14 +49,16 @@ Inductive wf_env : venv -> tenv -> Prop :=
 with val_type : venv -> vl -> ty -> Prop :=
      | v_bool: forall venv b,
          val_type venv (vbool b) TBool
+     | v_rec: forall venv,
+         val_type venv vrec TRec
      | v_abs: forall env venv tenv y T1 T2 m,
          wf_env venv tenv ->
-         has_type (expand_env (expand_env tenv (TFunRec T1 m T2) Second) T1 m) y First T2 ->
+         has_type (expand_env (expand_env tenv (TFun T1 m T2) Second) T1 m) y First T2 ->
          val_type env (vabs venv m y) (TFun T1 m T2)
      | v_absrec: forall env venv tenv y T1 T2 m,
          wf_env venv tenv ->
          has_type (expand_env (expand_env tenv (TFunRec T1 m T2) Second) T1 m) y First T2 ->
-         val_type env (vabsrec venv m y) (TFun T1 m T2)
+         val_type env (vabsrec venv m y) (TFunRec T1 m T2)
 .
 
 (* type equivalence: only via reflexivity *)
@@ -218,7 +220,19 @@ Lemma invert_abs: forall venv vf vx T1 n T2,
     stp venv T1 (expand_env (expand_env env vf Second) vx n) T3 /\
     stp (expand_env (expand_env env vf Second) vx n) T4 venv T2.
 Proof. 
-  intros. inversion H. repeat eexists; repeat eauto. 
+  intros. inversion H. repeat eexists; repeat eauto.
+Qed.
+
+Lemma invert_absrec: forall venv vf vx T1 n T2,
+  val_type venv vf (TFunRec T1 n T2) ->
+  exists env tenv y T3 T4,
+    vf = (vabsrec env n y) /\
+    wf_env env tenv /\
+    has_type (expand_env (expand_env tenv (TFunRec T3 n T4) Second) T3 n) y First T4 /\
+    stp venv T1 (expand_env (expand_env env vf Second) vx n) T3 /\
+    stp (expand_env (expand_env env vf Second) vx n) T4 venv T2.
+Proof. 
+  intros. inversion H. repeat eexists; repeat eauto.
 Qed.
 
 Lemma ext_sanitize_commute : forall {T} n venv (v:T) c,
@@ -248,9 +262,10 @@ Proof.
   intros. induction H.
   - simpl. eapply wfe_nil.
   - eapply wfe_cons in IHwf_env.
-    rewrite <-ext_sanitize_commute. rewrite <-ext_sanitize_commute.
-    eauto. eauto. rewrite ext_sanitize_commute.
-    eapply val_type_sanitize_any in H. eauto. eauto.
+    + rewrite <-ext_sanitize_commute. rewrite <-ext_sanitize_commute.
+      eauto.
+    + rewrite ext_sanitize_commute. eapply val_type_sanitize_any in H. eauto.
+    + eapply wf_idx. eauto.
 Qed.
 
 Lemma wf_sanitize : forall n venv tenv,
@@ -292,7 +307,7 @@ intros k. induction k.
     remember (teval k venv e1 Second) as tf.
     subst T. subst n0.
     
-    destruct tf as [rf|]; try solve by inversion.
+    destruct tf as [rf|] ; try solve by inversion.
     assert (res_type venv rf (TFun T1 m T2)) as HRF. SCase "HRF". subst. eapply IHk; eauto.
     inversion HRF as [? vf].
 
@@ -323,9 +338,59 @@ intros k. induction k.
     inversion HRY as [? vy].
 
     eapply not_stuck. eapply valtp_widen; eauto.
+
+  - Case "AppRec".
+    (* e2 *)
+    remember (teval k venv e2 Second) as tr.
+    subst T. subst n0.
+    destruct tr as [rr|]; try solve by inversion.
+    assert (res_type venv rr TRec) as HRR. SCase "HRR". subst. eapply IHk; eauto.
+    inversion HRR as [? vr].
+
+    subst rr. remember vr as rvr.
+    destruct vr; try (subst rvr; solve by inversion).
+    subst rvr. 
+    
+    (* e1 *)
+    remember (teval k venv e1 Second) as tf.
+    subst T. 
+    
+    destruct tf as [rf|] ; try solve by inversion.
+    assert (res_type venv rf (TFunRec T1 m T2)) as HRF. SCase "HRF". subst. eapply IHk; eauto.
+    inversion HRF as [? vf].
+
+    subst rf. remember vf as rvf. destruct vf; try (subst rvf; solve by inversion).
+    assert (c = m). destruct m; destruct c; try (subst rvf ; solve by inversion); eauto. subst c. subst rvf.
+
+    (* e3 *)
+    remember (teval k venv e3 m) as tx.
+
+    destruct tx as [rx|]; try solve by inversion.
+    assert (res_type venv rx T1) as HRX. SCase "HRX". subst. eapply IHk; eauto.
+    inversion HRX as [? vx]. 
+
+    destruct (invert_absrec venv (vabsrec e m t) vx T1 m T2) as
+        [env1 [tenv1 [y0 [T3 [T4 [EF [WF [HTY [STX STY]]]]]]]]]. eauto.
+    (* now we know it's a closure, and we have has_type evidence *)
+
+    inversion EF. subst e. subst y0. clear EF.
+    subst rx.
+
+    assert (res_type (expand_env (expand_env env1 (vabsrec env1 m t) Second) vx m) res T4) as HRY.
+        SSSCase "HRY".
+          subst. eapply IHk; eauto.
+        (* wf_env f x *) econstructor. eapply valtp_widen; eauto.
+        (* wf_env f   *) econstructor. eapply v_absrec; eauto.
+          eauto.
+          apply wf_idx. assumption.
+          apply wf_idx. econstructor. eauto. assumption. apply wf_idx. assumption.
+
+    inversion HRY as [? vy].
+
+    eapply not_stuck. eapply valtp_widen; eauto.
     
   - Case "Abs". intros. inversion H. inversion H0.
-    eapply not_stuck. eapply v_abs; eauto.
+    eapply not_stuck. eapply v_abs. eapply wf_sanitize. eauto.
     eauto.
 Qed.
 (* From nano-total: *)
