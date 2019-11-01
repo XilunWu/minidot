@@ -136,6 +136,9 @@ Inductive has_type : tenv -> tm -> class -> ty -> Prop :=
 | t_abs: forall m n env y T1 T2,
     has_type (expand_env (expand_env (sanitize_env n env) (TFunRec T1 m T2) Second) T1 m) y First T2 ->
     has_type env (tabs m y) n (TFun T1 m T2)
+| t_absrec: forall m n env y T1 T2,
+  has_type (expand_env (expand_env (sanitize_env n env) (TFunRec T1 m T2) Second) T1 m) y First T2 ->
+  has_type (expand_env (expand_env (sanitize_env n env) (TFun T1 m T2) Second) T1 m) y First T2.
 .
 
 (*
