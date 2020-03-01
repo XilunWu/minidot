@@ -24,3 +24,13 @@ Formalizations of the Dependent Object Types (DOT) calculus, from the bottom up,
 
 - Foundations of Path-Dependent Types (OOPSLA'14) [[pdf]](http://lampwww.epfl.ch/~amin/dot/fpdt.pdf)
   - [muDOT](./oopsla14)
+
+```Scala
+// Inputs (dim_x = M, dim_y = 10) * Weights (dim_x = 10, dim_y = 1) = Outputs (dim_x = M, dim_y = 1)
+val inputs      = tf.placeholder[Float](Shape(-1, 10))  // Tensor shape: [M, 10]
+val outputs     = tf.placeholder[Float](Shape(-1, 10))  // Tensor shape: [M, 10]
+val predictions = tf.nameScope("Linear") {
+  val weights = tf.variable[Float]("weights", Shape(10, 1), tf.ZerosInitializer) // Tensor shape: [10, 1]
+  tf.matmul(inputs, weights)  // Result shape: [M, 10]
+}
+```
